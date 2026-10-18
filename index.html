@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OX Game</title>
+<style>
+  :root { --bg:#14172b; --card:#1f2340; --x:#ff6b6b; --o:#4dd4ff; --text:#eef0ff; --muted:#8b90b8; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; padding:16px; }
+  h1 { margin:0 0 8px; letter-spacing:4px; }
+  .modes { display:flex; gap:8px; margin:8px 0 16px; flex-wrap:wrap; justify-content:center; }
+  button { font:inherit; color:var(--text); background:var(--card); border:2px solid transparent; border-radius:10px;
+           padding:8px 14px; cursor:pointer; }
+  button.active { border-color:var(--o); }
+  button:hover { filter:brightness(1.2); }
+  #status { height:28px; font-size:1.2rem; margin-bottom:12px; }
+  #board { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; width:min(90vw,360px); height:min(90vw,360px); }
+  .cell { background:var(--card); border:none; border-radius:14px; font-size:min(18vw,90px); font-weight:800;
+          display:flex; align-items:center; justify-content:center; padding:0; }
+  .cell.X { color:var(--x); } .cell.O { color:var(--o); }
+  .cell.win { background:#2e7d4f; }
+  .names { display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; justify-content:center; font-weight:700; }
+  .names input { width:110px; background:var(--card); color:var(--text); border:1px solid var(--muted); border-radius:8px; padding:6px; font:inherit; }
+  #lb table { border-collapse:collapse; min-width:260px; color:var(--text); }
+  #lb th,#lb td { padding:4px 10px; text-align:center; } #lb th { color:var(--muted); font-weight:600; }
+  .score i { font-style:normal; }
+  .score { display:flex; gap:24px; margin:16px 0; color:var(--muted); }
+  .score b { color:var(--text); font-size:1.3rem; }
+</style>
+</head>
+<body>
+  <h1>OX GAME</h1>
+  <div class="modes">
+    <button id="m-ai" class="active">vs Computer</button>
+    <button id="m-2p">2 Players</button>
+    <select id="diff" style="background:var(--card);color:var(--text);border-radius:10px;padding:8px;border:0">
+      <option value="easy">Easy</option><option value="hard" selected>Unbeatable</option>
+    </select>
+  </div>
+  <div id="status"></div>
+  <div id="board"></div>
+  <div class="names">
+    <label style="color:var(--x)">X <input id="nx" value="Player 1" maxlength="12"></label>
+    <label style="color:var(--o)">O <input id="no" value="Player 2" maxlength="12"></label>
+  </div>
+  <div class="score">
+    <span><i id="lx">X</i>: <b id="sx">0</b></span><span>Draw: <b id="sd">0</b></span><span><i id="lo">O</i>: <b id="so">0</b></span>
+  </div>
+  <div><button id="again">New Round</button> <button id="clear">Reset Scores</button></div>
+  <h3 style="margin:20px 0 6px">🏆 Leaderboard</h3>
+  <div id="lb" style="color:var(--muted)"></div>
+
+<script>
+const LINES=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const $=id=>document.getElementById(id);
+let board, turn, over, mode='ai', starter='X';
+// ---- Supabase (fill in from Dashboard > Project Settings > API; see setup.sql) ----
+const SUPABASE_URL='';      // e.g. https://abcdxyz.supabase.co
+const SUPABASE_KEY='';      // the "anon public" key
+const H={apikey:SUPABASE_KEY,Authorization:'Bearer '+SUPABASE_KEY,'Content-Type':'application/json'};
+async function remoteRecord(name,result){
+  if(!SUPABASE_URL) return;
+  try{ await fetch(SUPABASE_URL+'/rest/v1/rpc/record_result',{method:'POST',headers:H,body:JSON.stringify({p_name:name,p_result:result})}); }catch(e){}
+}
+async function loadBoard(){
+  const el=$('lb');
+  if(!SUPABASE_URL){ el.textContent='Global leaderboard not configured yet.'; return; }
+  try{
+    const r=await fetch(SUPABASE_URL+'/rest/v1/players?select=name,wins,losses,draws&order=wins.desc&limit=10',{headers:H});
+    const rows=await r.json();
+    el.innerHTML='<table><tr><th>#</th><th>Player</th><th>W</th><th>L</th><th>D</th></tr>'+
+      rows.map((p,i)=>`<tr><td>${i+1}</td><td></td><td>${p.wins}</td><td>${p.losses}</td><td>${p.draws}</td></tr>`).join('')+'</table>';
+    el.querySelectorAll('tr:not(:first-child) td:nth-child(2)').forEach((td,i)=>td.textContent=rows[i].name);
+  }catch(e){ el.textContent='Could not load leaderboard.'; }
+}
+let draws=0;
+let stats={}; // name -> {w,l,d}
+try{ stats=JSON.parse(localStorage.getItem('ox-stats')||'{}'); draws=+localStorage.getItem('ox-draws')||0; }catch(e){}
+function save(){ try{ localStorage.setItem('ox-stats',JSON.stringify(stats)); localStorage.setItem('ox-draws',draws); }catch(e){} }
+const nameOf=p=>($(p==='X'?'nx':'no').value.trim()||(p==='X'?'Player 1':'Player 2'));
+const rec=n=>stats[n]||(stats[n]={w:0,l:0,d:0});
+function showScore(){
+  $('lx').textContent=nameOf('X'); $('lo').textContent=nameOf('O');
+  $('sx').textContent=rec(nameOf('X')).w; $('so').textContent=rec(nameOf('O')).w; $('sd').textContent=draws;
+}
+
+function winner(b){
+  for(const l of LINES) if(b[l[0]]&&b[l[0]]===b[l[1]]&&b[l[0]]===b[l[2]]) return {p:b[l[0]],line:l};
+  return b.every(Boolean)?{p:'D'}:null;
+}
+function minimax(b,p){ // computer is O
+  const w=winner(b);
+  if(w) return w.p==='O'?1:w.p==='X'?-1:0;
+  let best=p==='O'?-2:2;
+  for(let i=0;i<9;i++) if(!b[i]){
+    b[i]=p; const s=minimax(b,p==='O'?'X':'O'); b[i]=null;
+    best=p==='O'?Math.max(best,s):Math.min(best,s);
+  }
+  return best;
+}
+function aiMove(){
+  const free=[...board.keys()].filter(i=>!board[i]);
+  if($('diff').value==='easy'&&Math.random()<0.6) return free[Math.floor(Math.random()*free.length)];
+  let best=-2,moves=[];
+  for(const i of free){
+    board[i]='O'; const s=minimax(board,'X'); board[i]=null;
+    if(s>best){best=s;moves=[i];} else if(s===best) moves.push(i);
+  }
+  return moves[Math.floor(Math.random()*moves.length)];
+}
+function render(winLine=[]){
+  const el=$('board'); el.innerHTML='';
+  board.forEach((v,i)=>{
+    const b=document.createElement('button');
+    b.className='cell '+(v||'')+(winLine.includes(i)?' win':'');
+    b.textContent=v||''; b.setAttribute('aria-label','cell '+(i+1));
+    b.onclick=()=>play(i); el.appendChild(b);
+  });
+}
+function finish(w){
+  over=true;
+  const a=nameOf('X'), b=nameOf('O');
+  if(w.p==='D'){ draws++; rec(a).d++; rec(b).d++; remoteRecord(a,'draw'); remoteRecord(b,'draw'); }
+  else { const win=w.p==='X'?a:b, lose=w.p==='X'?b:a; rec(win).w++; rec(lose).l++; remoteRecord(win,'win'); remoteRecord(lose,'loss'); }
+  setTimeout(loadBoard,800);
+  save(); showScore();
+  $('status').textContent=w.p==='D'?"It's a draw!":`${nameOf(w.p)} (${w.p}) wins! 🎉`;
+  render(w.line||[]);
+}
+function play(i){
+  if(over||board[i]) return;
+  if(mode==='ai'&&turn==='O') return;
+  move(i);
+  if(!over&&mode==='ai') setTimeout(()=>{ if(!over) move(aiMove()); },350);
+}
+function move(i){
+  board[i]=turn; const w=winner(board);
+  if(w){ finish(w); return; }
+  turn=turn==='X'?'O':'X'; render(); status();
+}
+function status(){ $('status').textContent=`${nameOf(turn)}'s turn (${turn})`; }
+function reset(){
+  board=Array(9).fill(null); over=false;
+  starter=starter==='X'?'O':'X'; turn=starter;
+  render(); status();
+  if(mode==='ai'&&turn==='O') setTimeout(()=>move(aiMove()),350);
+}
+function setMode(m){
+  mode=m; $('m-ai').classList.toggle('active',m==='ai'); $('m-2p').classList.toggle('active',m==='2p');
+  $('diff').style.display=m==='ai'?'':'none';
+  $('no').disabled=m==='ai';
+  if(m==='ai') $('no').value='Computer'; else if($('no').value==='Computer') $('no').value='Player 2';
+  starter='O'; reset(); showScore();
+}
+$('nx').oninput=$('no').oninput=()=>{ showScore(); if(!over) status(); };
+$('clear').onclick=()=>{ if(confirm('Reset all saved scores?')){ stats={}; draws=0; save(); showScore(); } };
+$('m-ai').onclick=()=>setMode('ai'); $('m-2p').onclick=()=>setMode('2p');
+$('again').onclick=reset;
+setMode('ai'); loadBoard();
+</script>
+</body>
+</html>
