@@ -36,7 +36,10 @@
     <button id="m-ai" class="active">vs Computer</button>
     <button id="m-2p">2 Players</button>
     <select id="diff" style="background:var(--card);color:var(--text);border-radius:10px;padding:8px;border:0">
-      <option value="easy">Easy</option><option value="hard" selected>Unbeatable</option>
+      <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard" selected>Unbeatable</option>
+    </select>
+    <select id="side" style="background:var(--card);color:var(--text);border-radius:10px;padding:8px;border:0">
+      <option value="X" selected>You: X (first)</option><option value="O">You: O</option>
     </select>
   </div>
   <div id="status"></div>
@@ -90,22 +93,25 @@ function winner(b){
   for(const l of LINES) if(b[l[0]]&&b[l[0]]===b[l[1]]&&b[l[0]]===b[l[2]]) return {p:b[l[0]],line:l};
   return b.every(Boolean)?{p:'D'}:null;
 }
-function minimax(b,p){ // computer is O
+let ai='O'; // seat the computer plays
+const other=p=>p==='X'?'O':'X';
+function minimax(b,p){ // score from the computer's point of view
   const w=winner(b);
-  if(w) return w.p==='O'?1:w.p==='X'?-1:0;
-  let best=p==='O'?-2:2;
+  if(w) return w.p===ai?1:w.p==='D'?0:-1;
+  let best=p===ai?-2:2;
   for(let i=0;i<9;i++) if(!b[i]){
-    b[i]=p; const s=minimax(b,p==='O'?'X':'O'); b[i]=null;
-    best=p==='O'?Math.max(best,s):Math.min(best,s);
+    b[i]=p; const s=minimax(b,other(p)); b[i]=null;
+    best=p===ai?Math.max(best,s):Math.min(best,s);
   }
   return best;
 }
+const RANDOM_CHANCE={easy:0.6,medium:0.25,hard:0};
 function aiMove(){
   const free=[...board.keys()].filter(i=>!board[i]);
-  if($('diff').value==='easy'&&Math.random()<0.6) return free[Math.floor(Math.random()*free.length)];
+  if(Math.random()<RANDOM_CHANCE[$('diff').value]) return free[Math.floor(Math.random()*free.length)];
   let best=-2,moves=[];
   for(const i of free){
-    board[i]='O'; const s=minimax(board,'X'); board[i]=null;
+    board[i]=ai; const s=minimax(board,other(ai)); board[i]=null;
     if(s>best){best=s;moves=[i];} else if(s===best) moves.push(i);
   }
   return moves[Math.floor(Math.random()*moves.length)];
@@ -131,7 +137,7 @@ function finish(w){
 }
 function play(i){
   if(over||board[i]) return;
-  if(mode==='ai'&&turn==='O') return;
+  if(mode==='ai'&&turn===ai) return;
   move(i);
   if(!over&&mode==='ai') setTimeout(()=>{ if(!over) move(aiMove()); },350);
 }
@@ -145,15 +151,23 @@ function reset(){
   board=Array(9).fill(null); over=false;
   starter=starter==='X'?'O':'X'; turn=starter;
   render(); status();
-  if(mode==='ai'&&turn==='O') setTimeout(()=>move(aiMove()),350);
+  if(mode==='ai'&&turn===ai) setTimeout(()=>{ if(!over&&turn===ai) move(aiMove()); },350);
+}
+function setSeats(){ // lock the computer's name field, free the human's
+  const aiField=$(ai==='X'?'nx':'no'), humField=$(ai==='X'?'no':'nx');
+  humField.disabled=false;
+  if(humField.value==='Computer') humField.value=humField===$('nx')?'Player 1':'Player 2';
+  if(mode==='ai'){ aiField.value='Computer'; aiField.disabled=true; }
+  else { aiField.disabled=false; if(aiField.value==='Computer') aiField.value=aiField===$('nx')?'Player 1':'Player 2'; }
 }
 function setMode(m){
   mode=m; $('m-ai').classList.toggle('active',m==='ai'); $('m-2p').classList.toggle('active',m==='2p');
-  $('diff').style.display=m==='ai'?'':'none';
-  $('no').disabled=m==='ai';
-  if(m==='ai') $('no').value='Computer'; else if($('no').value==='Computer') $('no').value='Player 2';
+  $('diff').style.display=$('side').style.display=m==='ai'?'':'none';
+  ai=$('side').value==='X'?'O':'X';
+  setSeats();
   starter='O'; reset(); showScore();
 }
+$('side').onchange=()=>setMode('ai');
 $('nx').oninput=$('no').oninput=()=>{ showScore(); if(!over) status(); };
 $('clear').onclick=()=>{ if(confirm('Reset all saved scores?')){ stats={}; draws=0; save(); showScore(); } };
 $('m-ai').onclick=()=>setMode('ai'); $('m-2p').onclick=()=>setMode('2p');
